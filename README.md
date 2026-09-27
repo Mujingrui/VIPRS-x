@@ -1,8 +1,7 @@
 # VIPRS-x — Variational Inference for Polygenic Risk Scores across Ancestries
 
 Variational EM for Bayesian polygenic risk scores, implemented from scratch in R, extended
-from a single population to joint modelling across two ancestries. Graduate course project,
-McGill University, December 2024.
+from a single population to joint modelling across two ancestries. 
 
 **The problem.** Polygenic risk scores predict a phenotype from hundreds of thousands of
 genetic markers. Bayesian formulations give calibrated uncertainty but are usually fit by
