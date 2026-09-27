@@ -1,0 +1,254 @@
+E_step_single <- function(tau_epsilon, tau_beta, pii, N, beta_hat, M, R, X, Y,
+                   gammaj_current, tau_betaj_current, mu_betaj_current){
+  gammaj_update <- gammaj_current
+  tau_betaj_update <- tau_betaj_current
+  mu_betaj_update <- mu_betaj_current
+  uj_update <- rep(0,M)
+  for(j in 1:M){
+    tau_betaj_update[j] <- (t(X[,j])%*%X[,j])*tau_epsilon + tau_beta
+    temp <- gammaj_update*mu_betaj_update
+    mu_betaj_update[j] <- N*(tau_epsilon/tau_betaj_update[j]) *
+      (t(Y)%*%X[,j]/N - t(temp[-j]) %*% R[-j,j])
+    uj_update[j] <- log(pii/(1-pii)) + 0.5*log(tau_beta/tau_betaj_update[j])
+    +0.5*tau_betaj_update[j]*(mu_betaj_update[j]^2)
+    temp_gammaj_update <- 1/(1+exp(-uj_update[j]))
+    if(temp_gammaj_update < 0.01){
+      gammaj_update[j]<- 0.01
+    }else if(temp_gammaj_update > 0.99){
+      gammaj_update[j]<- 0.99
+    }else{
+      gammaj_update[j] <- temp_gammaj_update
+    }
+  }
+  return(list(tau_betaj = tau_betaj_update, muj = mu_betaj_update, gammaj = gammaj_update))
+}
+
+M_step_single <- function(tau_betaj, gammaj, muj, M){
+  tau_beta <- sum(gammaj)/(t(gammaj)%*%(muj^2+1/tau_betaj))
+  pii <- sum(gammaj)/M
+  return(list(tau_beta = tau_beta, pii = pii))
+}
+
+ELBO_single <- function(tau_epsilon, tau_beta, pii, gammaj, muj, tau_betaj, X, Y, M, N){
+  temp_part1 <- rep(0,M)
+  for(j in 1:M){
+    temp_part1[j] <- (gammaj[j] * (muj[j]^2 + 1/tau_betaj[j])) * (t(X[,j]) %*% X[,j])
+  }
+  double_sum_result <- 0
+  for(j in 1:(M-1)){
+    for(k in (j+1):M){
+      summand <- gammaj[j] * muj[j] * gammaj[k] * muj[k] * (t(X[,k]) %*% X[,j])
+      double_sum_result <- double_sum_result + summand
+    }
+  }
+  E_q_lny <- N/2 * log(tau_epsilon) - 0.5 * tau_epsilon * (t(Y)%*%Y) +
+    tau_epsilon * (t(gammaj*muj) %*% t(X) %*% Y) -
+    0.5*tau_epsilon*sum(temp_part1) - tau_epsilon * double_sum_result
+  E_q_lnp_beta <- (-1)* tau_beta*0.5*sum(gammaj * (muj^2+1/tau_betaj))
+  E_q_lnp_s <- log(pii)*sum(gammaj) + log(1-pii)*(sum(1-gammaj))
+  E_q_lnq_beta <- (-0.5)*log(tau_beta)*sum(gammaj)
+  E_q_lnq_q <- sum(gammaj*log(gammaj)) + sum((1-gammaj)*log(1-gammaj))
+  return(E_q_lny+E_q_lnp_beta+E_q_lnp_s-E_q_lnq_beta-E_q_lnq_q)
+}
+
+VIPRS_single <- function(maxiter, tau_epsilon, tau_beta_initial, pii_initial, N,
+                  beta_hat, M, R, X, Y, gammaj_initial, tau_betaj_initial, mu_betaj_initial){
+  # tau_epsilon_path <- rep(0, maxiter)
+  tau_epsilon_path <- rep(0, maxiter)
+  tau_beta_path <- rep(0, maxiter)
+  pii_path <- rep(0, maxiter)
+  gammaj_path <- matrix(data = NA, nrow = M, ncol = maxiter)
+  tau_betaj_path <- matrix(data = NA, nrow = M, ncol = maxiter)
+  mu_betaj_path <- matrix(data = NA, nrow = M, ncol = maxiter)
+  ELBO_path <- rep(0, maxiter)
+  
+  # tau_epsilon_path[1] <- tau_epsilon_initial
+  tau_beta_path[1] <- tau_beta_initial
+  pii_path[1] <- pii_initial
+  
+  gammaj_path[,1] <- gammaj_initial
+  tau_betaj_path[,1] <- tau_betaj_initial
+  mu_betaj_path[,1] <- mu_betaj_initial
+  ELBO_path[1] <- ELBO_single(tau_epsilon = tau_epsilon, 
+                       tau_beta = tau_beta_path[1], 
+                       pii = pii_path[1], 
+                       gammaj = gammaj_path[,1], 
+                       muj = mu_betaj_path[,1], 
+                       tau_betaj = tau_betaj_path[,1], 
+                       X = X, Y = Y, M = M, N = N)
+  count <- 0
+  for(i in 2:maxiter){
+    tau_betaj_path[,i] <- E_step_single(tau_epsilon = tau_epsilon, 
+                                 tau_beta = tau_beta_path[i-1], 
+                                 pii = pii_path[i-1], N = N, 
+                                 beta_hat = beta_hat, M = M, R = R,
+                                 gammaj_current = gammaj_path[,i-1], 
+                                 tau_betaj_current = tau_betaj_path[,i-1],
+                                 mu_betaj_current = mu_betaj_path[,i-1], 
+                                 X = X, Y = Y)$tau_betaj
+    mu_betaj_path[,i] <- E_step_single(tau_epsilon = tau_epsilon, 
+                                tau_beta = tau_beta_path[i-1], 
+                                pii = pii_path[i-1], N = N, 
+                                beta_hat = beta_hat, M = M, R = R, 
+                                gammaj_current = gammaj_path[,i-1],
+                                tau_betaj_current = tau_betaj_path[,i-1],
+                                mu_betaj_current = mu_betaj_path[,i-1], 
+                                X = X, Y = Y)$muj
+    gammaj_path[,i] <- E_step_single(tau_epsilon = tau_epsilon, 
+                              tau_beta = tau_beta_path[i-1], 
+                              pii = pii_path[i-1], N = N, 
+                              beta_hat = beta_hat, M = M, R = R, 
+                              gammaj_current = gammaj_path[,i-1],
+                              tau_betaj_current =tau_betaj_path[,i-1],
+                              mu_betaj_current = mu_betaj_path[,i-1],
+                              X = X, Y = Y)$gammaj
+    tau_beta_path[i] <- M_step_single(tau_betaj = tau_betaj_path[,i], 
+                               gammaj = gammaj_path[,i], 
+                               muj = mu_betaj_path[,i], M = M)$tau_beta
+    pii_path[i] <- M_step_single(tau_betaj = tau_betaj_path[,i], 
+                          gammaj = gammaj_path[,i], 
+                          muj = mu_betaj_path[,i], M = M)$pii
+    ELBO_path[i] <- ELBO_single(tau_epsilon = tau_epsilon, 
+                         tau_beta = tau_beta_path[i], 
+                         pii = pii_path[i], 
+                         gammaj = gammaj_path[,i], 
+                         muj = mu_betaj_path[,i], 
+                         tau_betaj = tau_betaj_path[,i], 
+                         X = X, Y = Y, M = M, N = N)
+    
+    if(abs(ELBO_path[i] - ELBO_path[i-1]) < 1e-4){
+      break
+      count <- i
+    }
+  }
+  
+  return(list(ELBO_out = ELBO_path,
+              tau_beta_out = tau_beta_path, 
+              pii_out = pii_path, 
+              tau_betaj_out = tau_betaj_path, 
+              mu_betaj_out = mu_betaj_path, 
+              gammaj_out = gammaj_path, count = count))
+}
+
+LD <- LD_eas
+LD <- apply(LD, 2, as.numeric)
+
+X_train <- as.matrix.data.frame(scaled.X_train_eas)
+X_train <- apply(X_train, 2, as.numeric)
+
+y_train <- as.matrix(scaled.y_train_eas)
+y_train <- apply(y_train, 2, as.numeric)
+
+
+beta_hat <- beta_marginal[,1]
+
+####initial values
+M <- 100
+N <- 352
+
+mu_betaj_initial <- rep(0, M)
+tau_betaj_initial <- rep(0.92, M)
+gammaj_initial <- rep(0.1, M)
+
+tau_epsilon <- 0.95
+tau_beta_initial <- 12.5
+pii_initial <- 0.1
+
+VIPRS_plot1 <- VIPRS_single(maxiter = 100, tau_epsilon = 0.95, 
+                     tau_beta_initial = tau_beta_initial, 
+                     pii_initial = pii_initial, N = N, 
+                     beta_hat = beta_hat, M = M, R = LD, 
+                     X = X_train, Y = y_train, 
+                     gammaj_initial = gammaj_initial, 
+                     tau_betaj_initial = tau_betaj_initial,
+                     mu_betaj_initial = mu_betaj_initial)
+
+
+y_train_predicted_eas_single <- X_data[[1]] %*% (VIPRS_plot1$gammaj_out[,7]*VIPRS_plot1$mu_betaj_out[,7])
+data1_single <- data.frame(Predicted.phenotype = y_train_predicted_eas_single, True.phenotype = Y_data[[1]][,1])
+
+y_train_predicted_eur_single <- X_data[[2]] %*% (VIPRS_plot2$gammaj_out[,64]*VIPRS_plot2$mu_betaj_out[,64])
+data2_single <- data.frame(Predicted.phenotype = y_train_predicted_eur_single, True.phenotype = Y_data[[2]][,1])
+
+train_PPC_eas_single <- cor(data1_single$Predicted.phenotype, data1_single$True.phenotype, method = "pearson")
+train_PPC_eur_single <- cor(data2_single$Predicted.phenotype, data2_single$True.phenotype, method = "pearson")
+
+# Create function to generate the plot for each dataset
+create_plot <- function(data, title, corr) {
+  ggplot(data, aes(x = Predicted.phenotype, y = True.phenotype)) +
+    geom_point(size = 1) +
+    geom_smooth(method = "lm", se = FALSE, color = "blue") +
+    labs(
+      title = paste0(title, " (Pearson Correlation Coef. = ", corr, ")"),
+      x = "Predicted phenotype",
+      y = "True phenotype"
+    ) +
+    theme_bw() +
+    theme(
+      panel.grid.minor = element_line(color = "gray90"),
+      panel.grid.major = element_line(color = "gray90"),
+      plot.title = element_text(hjust = 0.5)
+    ) +
+    coord_cartesian(xlim = c(-0.2, 0.2), ylim = c(-3, 3))
+}
+# Create individual plots
+p1 <- create_plot(data1_single, "East Asian", round(train_PPC_eas_single,4))
+p2 <- create_plot(data2_single, "Europe", round(train_PPC_eur_single,4))
+
+# Combine plots
+combined_plot <- grid.arrange(p1, p2, ncol = 2)
+
+
+y_test_predicted_eas_single <- X_data_test[[1]] %*% (VIPRS_plot1$gammaj_out[,7]*VIPRS_plot1$mu_betaj_out[,7])
+data1_single_test <- data.frame(Predicted.phenotype = y_test_predicted_eas_single, True.phenotype = Y_data_test[[1]][,1])
+
+y_test_predicted_eur_single <- X_data_test[[2]] %*% (VIPRS_plot2$gammaj_out[,64]*VIPRS_plot2$mu_betaj_out[,64])
+data2_single_test <- data.frame(Predicted.phenotype = y_test_predicted_eur_single, True.phenotype = Y_data_test[[2]][,1])
+
+test_PPC_eas_single <- cor(data1_single_test$Predicted.phenotype, data1_single_test$True.phenotype, method = "pearson")
+test_PPC_eur_single <- cor(data2_single_test$Predicted.phenotype, data2_single_test$True.phenotype, method = "pearson")
+
+p1 <- create_plot(data1_single_test, "East Asian", round(test_PPC_eas_single,4))
+p2 <- create_plot(data2_single_test, "Europe", round(_PPC_eur_single,4))
+
+# Combine plots
+combined_plot <- grid.arrange(p1, p2, ncol = 2)
+
+
+#############
+
+LD <- LD_eur
+LD <- apply(LD, 2, as.numeric)
+
+X_train <- as.matrix.data.frame(scaled.X_train_eur)
+X_train <- apply(X_train, 2, as.numeric)
+
+y_train <- as.matrix(scaled.y_train_eur)
+y_train <- apply(y_train, 2, as.numeric)
+
+
+beta_hat <- beta_marginal[,2]
+
+####initial values
+M <- 100
+N <- 273
+
+mu_betaj_initial <- rep(0, M)
+tau_betaj_initial <- rep(1-10^{-5}, M)
+gammaj_initial <- rep(0.8, M)
+
+tau_epsilon <- 0.95
+tau_beta_initial <- 100000
+pii_initial <- 0.8
+
+VIPRS_plot2 <- VIPRS_single(maxiter = 100, tau_epsilon = 0.95, 
+                            tau_beta_initial = tau_beta_initial, 
+                            pii_initial = pii_initial, N = N, 
+                            beta_hat = beta_hat, M = M, R = LD, 
+                            X = X_train, Y = y_train, 
+                            gammaj_initial = gammaj_initial, 
+                            tau_betaj_initial = tau_betaj_initial,
+                            mu_betaj_initial = mu_betaj_initial)
+
+sqrt(sum((X_train%*%(VIPRS_plot2$gammaj_out[,39]*VIPRS_plot2$mu_betaj_out[,39]) - y_train)^2))
+

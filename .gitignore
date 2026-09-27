@@ -1,0 +1,8 @@
+.Rhistory
+.RData
+.Rapp.history
+.Rproj.user/
+*.Rproj
+.DS_Store
+*_files/
+*.html
